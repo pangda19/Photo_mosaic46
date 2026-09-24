@@ -35,10 +35,10 @@ body.review #shot{display:block}
     <img id="shot" alt="">
     <svg id="guide" viewBox="0 0 800 600" preserveAspectRatio="none">
       <g fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="14 9" style="filter:drop-shadow(0 0 3px #000)">
-        <rect x="258" y="60" width="284" height="402" rx="4"/>
+        <rect x="180" y="105" width="440" height="311" rx="4"/>
         <path d="M110 600 C125 505 215 470 300 462 M500 462 C585 470 675 505 690 600"/>
       </g>
-      <text x="400" y="270" fill="#fff" fill-opacity=".8" font-size="22" text-anchor="middle" style="paint-order:stroke;stroke:#000;stroke-width:4">A4 sign</text>
+      <text x="400" y="268" fill="#fff" fill-opacity=".8" font-size="22" text-anchor="middle" style="paint-order:stroke;stroke:#000;stroke-width:4">A4 sign</text>
     </svg>
     <div id="hint">Fit your sign inside the frame and face the light</div>
     <div id="msg"></div>
@@ -52,9 +52,9 @@ body.review #shot{display:block}
   </div>
 </div>
 <script>
-// ===== ตั้งค่า =====
-const UPLOAD_URL = "";      // ใส่ลิงก์ที่ให้อัปโหลด (เช่น Google Form / โฟลเดอร์) ถ้าเว้นว่างจะไม่แสดงปุ่ม
-const OUT_W = 800, OUT_H = 600; // ขนาดไฟล์ 4:3
+// ===== Settings =====
+const UPLOAD_URL = "";        // Put your upload link here (e.g. Google Form / shared folder). Leave empty to hide the button.
+const MAX_W = 4096;           // Max output width in px (height follows 4:3). Output is the full camera resolution up to this.
 // ====================
 const $ = id => document.getElementById(id);
 const v = $('v'), stage = $('stage'), msg = $('msg');
@@ -72,34 +72,45 @@ function say(t){ msg.innerHTML = t; msg.style.display = t ? 'flex' : 'none'; }
 async function start(){
   say('');
   if (stream) stream.getTracks().forEach(t => t.stop());
-  if (/Line\/|FBAN|FBAV|Instagram|Twitter/i.test(navigator.userAgent))
-    say('If the camera does not start, please open this link in Safari or Chrome<br>(in-app browsers often block camera access)');
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:facing}, width:{ideal:1920}, height:{ideal:1080}}, audio:false});
-    v.srcObject = stream; await v.play();
-    v.style.transform = facing === 'user' ? 'scaleX(-1)' : 'none'; // พรีวิวกลับด้านเฉพาะกล้องหน้า
-    say('');
-  }catch(e){
-    say('Could not open the camera<br>Please allow camera access in your browser<br>and open this page over https');
+  stream = null; v.srcObject = null;
+  const tries = [
+    {video:{facingMode:{ideal:facing}, width:{ideal:4032}, height:{ideal:3024}}, audio:false},
+    {video:{facingMode:{ideal:facing}}, audio:false}
+  ];
+  let err = null;
+  for (const c of tries){
+    try{ stream = await navigator.mediaDevices.getUserMedia(c); break; }catch(e){ err = e; }
   }
+  if (!stream){
+    say('Could not open the camera<br>Please allow camera access, open this page over https,<br>and if you are in LINE/X/Instagram, open it in Safari or Chrome' + (err ? '<br><small>(' + err.name + ')</small>' : ''));
+    return;
+  }
+  v.muted = true; v.setAttribute('playsinline', '');
+  v.srcObject = stream;
+  v.style.transform = facing === 'user' ? 'scaleX(-1)' : 'none'; // mirror the preview only for the front camera
+  try{ await v.play(); }catch(e){}
+  setTimeout(() => { if (!v.videoWidth) say('The camera is on but there is no picture.<br>Try Flip camera, or reload the page.'); }, 3000);
 }
+v.addEventListener('playing', () => say(''));
 
 $('flip').onclick = () => { facing = facing === 'user' ? 'environment' : 'user'; start(); };
 
 $('shutter').onclick = () => {
-  if (!v.videoWidth) return;
   const vw = v.videoWidth, vh = v.videoHeight;
+  if (!vw){ say('No camera picture yet.<br>Try Flip camera, or reload the page.'); return; }
   let sw, sh;
-  if (vw / vh > 4/3){ sh = vh; sw = vh * 4/3; } else { sw = vw; sh = vw * 3/4; }
-  const c = document.createElement('canvas'); c.width = OUT_W; c.height = OUT_H;
-  c.getContext('2d').drawImage(v, (vw - sw)/2, (vh - sh)/2, sw, sh, 0, 0, OUT_W, OUT_H); // บันทึกภาพปกติ ไม่กลับด้าน
+  if (vw / vh > 4/3){ sh = vh; sw = Math.round(vh * 4/3); } else { sw = vw; sh = Math.round(vw * 3/4); }
+  const k = Math.min(1, MAX_W / sw);
+  const ow = Math.round(sw * k), oh = Math.round(sh * k);
+  const c = document.createElement('canvas'); c.width = ow; c.height = oh;
+  c.getContext('2d').drawImage(v, Math.round((vw - sw)/2), Math.round((vh - sh)/2), sw, sh, 0, 0, ow, oh); // saved un-mirrored
   c.toBlob(b => {
+    if (!b){ say('Could not create the photo. Please try again.'); return; }
     blob = b;
     $('shot').src = URL.createObjectURL(b);
     document.body.classList.add('review');
     $('guide').style.display = 'none'; $('hint').style.display = 'none';
-  }, 'image/jpeg', 0.9);
+  }, 'image/jpeg', 0.92);
 };
 
 $('retake').onclick = () => {
@@ -114,11 +125,11 @@ $('save').onclick = async () => {
   const file = new File([blob], name, {type:'image/jpeg'});
   try{
     if (navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({files:[file]});   // มือถือ: เลือก "บันทึกรูปภาพ" ได้จากเมนูแชร์
+      await navigator.share({files:[file]});   // Mobile: choose "Save Image" from the share sheet
     } else { throw new Error('fallback'); }
   }catch(e){
     if (e.name === 'AbortError') return;
-    const a = document.createElement('a');       // สำรอง: ดาวน์โหลดไฟล์
+    const a = document.createElement('a');       // Fallback: download the file
     a.href = URL.createObjectURL(blob); a.download = name; a.click();
   }
   if (UPLOAD_URL){ $('up').href = UPLOAD_URL; $('up').style.display = 'block'; }
